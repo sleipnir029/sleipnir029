@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/current.gif" alt="ASCII horse animation" width="920">
+  <img src="assets/current.gif" alt="pixel art: a cyclist rides through fields and forest as day turns to night, stops on a bridge under the moon to breathe, then rides into the dawn" width="740">
 </div>
 
 <p align="center">
