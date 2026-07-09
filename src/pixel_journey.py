@@ -600,7 +600,7 @@ def make_frame(t):
                 px[x, yy] = lerp(px[x, yy], mcol, 0.35)
 
     # --- rider
-    draw_rider(px, plot, t, d, g)
+    draw_rider(px, plot, t, s, d, g)
 
     return img
 
@@ -614,7 +614,7 @@ def rider_pal(d):
              'shorts': P_SHORTS, 'hair': P_HAIR}.items()}
 
 
-def draw_rider(px, plot, t, d, g):
+def draw_rider(px, plot, t, s, d, g):
     c = rider_pal(d)
     wy = ROAD_TOP - 5                  # wheel centers
     bx = RIDER_X                       # front wheel center
@@ -637,7 +637,9 @@ def draw_rider(px, plot, t, d, g):
             plot(int(round(cx + 4 * math.cos(ang))),
                  int(round(wy + 4 * math.sin(ang))), c['bike'])
         plot(cx, wy, c['bike'])
-        sp = (t // 2) % 4 * math.pi / 4
+        # spokes turn with distance, not time: they slow into the stop,
+        # freeze while parked, and spin up again on the pull-away
+        sp = (s // 3) % 4 * math.pi / 4
         for r_ in (2, 3):
             plot(int(round(cx + r_ * math.cos(sp))),
                  int(round(wy + r_ * math.sin(sp))), c['bike'])
@@ -663,7 +665,7 @@ def draw_rider(px, plot, t, d, g):
         wheel(rx)
         frame_and_bars()
         bb = bx - 8
-        pedal = (t // 3) % 2
+        pedal = (s // 9) % 2           # pedals follow the road too
         # legs: hip at saddle, cranks opposed
         hipx, hipy = bb - 3, wy - 7
         if pedal:
