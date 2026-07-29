@@ -1,3 +1,10 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# build intermediates: build_animation.py renders these, then copies to current.*
+assets/pixel_journey.gif
+assets/pixel_journey.webp
+assets/pixel_journey_poster.png
+assets/pixel_s*.png
+.playwright-mcp/

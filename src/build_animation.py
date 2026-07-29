@@ -15,4 +15,8 @@ if __name__ == '__main__':
     shutil.copy(gif, ASSETS / 'current.gif')
     shutil.copy(ASSETS / 'pixel_journey.webp', ASSETS / 'current.webp')
     shutil.copy(ASSETS / 'pixel_journey_poster.png', ASSETS / 'current_poster.png')
+    # The scene writes pixel_journey.* and we publish copies as current.*; leaving
+    # both costs ~13 MB of duplicate build output in the working tree.
+    for tmp in ('pixel_journey.gif', 'pixel_journey.webp', 'pixel_journey_poster.png'):
+        (ASSETS / tmp).unlink(missing_ok=True)
     print('built assets/current.gif (+webp, poster)')

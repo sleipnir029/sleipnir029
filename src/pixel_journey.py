@@ -78,8 +78,15 @@ P_FAR_LIT = ((128, 150, 176), (20, 23, 52))
 P_HILL = ((78, 126, 84), (11, 13, 32))
 P_GROUND = ((104, 152, 74), (15, 17, 32))
 P_ROAD = ((186, 172, 152), (58, 56, 76))
+# Foliage ramp, five steps. Hue-shifts toward warm yellow-green in the light and
+# toward cool blue-green in shadow, rather than just darkening one hue; chroma
+# peaks at the base and drops at both ends so the highlight doesn't go neon and
+# the shadow doesn't go muddy.
+P_TREE_HI = ((132, 180, 98), (22, 28, 50))
+P_TREE_LIT = ((92, 154, 82), (14, 18, 36))
 P_TREE = ((52, 112, 60), (9, 12, 28))
-P_TREE_LIT = ((84, 150, 82), (14, 18, 36))
+P_TREE_SH = ((34, 80, 58), (6, 8, 20))
+P_TREE_DP = ((22, 56, 48), (4, 5, 14))
 P_TRUNK = ((84, 66, 48), (16, 14, 26))
 P_WATER = ((70, 132, 180), (24, 22, 56))
 P_WATER_DEEP = ((38, 84, 130), (9, 9, 24))
@@ -112,6 +119,45 @@ def darkness(x):
 
 def golden(d):
     return max(0.0, 1.0 - abs(d - 0.45) / 0.3)   # peaks mid-transition
+
+
+# The sun sits at x=187 of 246 and stays high, so the light comes from the upper
+# RIGHT.
+#
+# Every element used to be lit from the upper LEFT -- peaks, leafy crowns and
+# pines alike. The world was self-consistent; it just disagreed with its own sun.
+# An earlier pass read the peaks' `lit` predicate off its comment instead of its
+# code, concluded they already faced right, flipped only the plants, and so
+# produced the two-sun scene it was trying to prevent. Everything that shades
+# now goes through this one vector, peaks included.
+LIGHT = (0.55, -0.95)          # (dx, dy) weights: toward the sun
+
+
+def shade_index(ddx, ddy, span, steps=5):
+    """Quantize a surface offset into `steps` ramp indices along the light.
+
+    Position-based rather than normal-based: at this resolution a form is a few
+    pixels across, and a dot product against a real normal quantizes to the same
+    few bands anyway.
+
+    Pass a `span` that matches the caller's ACTUAL range of `v`. Too wide and the
+    extremes of the ramp are never reached, which is how the pines and the bushes
+    each ended up flat in the middle of their own five-step ramp.
+    """
+    span = max(1e-6, span)
+    v = ddx * LIGHT[0] + ddy * LIGHT[1]
+    i = int((v + span) / (2 * span) * steps)
+    return max(0, min(steps - 1, i))
+
+
+def h8(a, b=0):
+    """Small deterministic hash -> 0..255.
+
+    Keyed on WORLD coordinates only. Anything keyed on screen x or frame number
+    crawls or shimmers as the scene scrolls.
+    """
+    h = (int(a) * 2654435761 + int(b) * 40503 + 0x9e37) & 0xffffffff
+    return (h >> 13) & 0xff
 
 # ------------------------------------------------------------ timeline
 
@@ -147,6 +193,11 @@ STARS = [(RNG.randrange(PW), RNG.randrange(50), RNG.random()) for _ in range(42)
 
 CLOUDS = [(20, 11), (130, 21), (300, 7), (440, 16)]       # 0.5x strip, 480
 
+# Original ridge, restored. A seven-peak version with a per-peak slope was tried
+# to break the repeat, and it read worse: varying the slope flattened every peak,
+# so the range lost its silhouette hierarchy -- no single summit anchored the
+# background any more -- and the snowcaps lost their shape along with it. The
+# repeat is the cheaper flaw.
 FAR_PEAKS = [(-14, 35), (33, 21), (80, 40), (127, 27), (173, 37), (220, 24)]
 FAR_LEN = 240                                             # 0.25x strip
 
@@ -177,6 +228,10 @@ FENCES = [(11, 240), (853, 952)]
 REEDS = [LAKE_L - 5, LAKE_L + 4, LAKE_R - 4, LAKE_R + 5,
          BRIDGE_L - 8, BRIDGE_R + 8]
 
+# Reverted to the original flat draw. The tuft+grain rewrite was measured worse
+# by the very metric it was meant to improve: orphan pixels in the meadow band
+# went 1185 -> 1378 (+16%), because the grain layer is itself 2800 lone pixels,
+# and at 5x zoom the two were indistinguishable.
 MEADOW = [(RNG.randrange(L), RNG.randrange(ROAD_BOT + 1, PH),
            RNG.uniform(-0.25, 0.3)) for _ in range(4600)]
 FLOWER_COLS = [(235, 160, 170), (245, 240, 210), (250, 210, 120)]
@@ -194,19 +249,84 @@ ROAD_MARKS = [(RNG.randrange(L), RNG.randrange(1, 4)) for _ in range(70)]
 WIND_FLECKS = [(RNG.randrange(L), RNG.randrange(ROAD_TOP - 22, ROAD_TOP + 8),
                 RNG.uniform(0, 6.3)) for _ in range(12)]
 
+
 RABBIT_X = 200
 
 
-def water_cell(wc, y):
+def shore_jitter(wc):
+    """+/-1 px wobble on a waterline, keyed to the world column.
+
+    A bank computed straight from y alone is a ruler-drawn diagonal. Keying the
+    wobble to the world column (never to screen x or frame) keeps the shoreline
+    identical as it scrolls, so it reads as an irregular edge instead of
+    shimmering.
+    """
+    return (wc * 7 + wc // 3) % 3 - 1
+
+
+def river_inset(y):
+    """Bank slope for the gorge under the bridge.
+
+    The river reads as receding at the top of the water band and nearest the
+    viewer at the bottom, so its banks splay outward as y grows -- a 2:1 pixel
+    slope. Shared with the bank-pixel pass so the two can't drift apart: the
+    river once returned True unconditionally here and got no bank at all.
+    """
+    return max(0, (PH - 1 - y) // 2)
+
+
+def lake_inset(y):
+    """Bank slope for the lake: a shallow lens that closes before the meadow."""
+    return (y - ROAD_BOT - 1) * 4
+
+
+def _water_raw(wc, y):
+    """The shoreline as computed from the slope formulas, specks and all."""
     wc = wc % L
     if y <= ROAD_BOT:
         return False
-    if BRIDGE_L + 5 <= wc <= BRIDGE_R - 5:
-        return True
+    if BRIDGE_L <= wc <= BRIDGE_R:
+        inset = river_inset(y) + shore_jitter(wc)
+        return BRIDGE_L + inset <= wc <= BRIDGE_R - inset
     if y > ROAD_BOT + 24:
         return False
-    inset = (y - ROAD_BOT - 1) * 4
+    inset = lake_inset(y) + shore_jitter(wc)
     return LAKE_L + 8 + inset <= wc <= LAKE_R - 8 - inset
+
+
+def _build_water_mask():
+    """Bake the shoreline once, removing 1-px spikes.
+
+    `shore_jitter` wobbles per COLUMN on an edge that only moves a pixel every
+    other row, so wherever a column jitters one way and both its neighbours the
+    other, it leaves a single-pixel spike. That produced 18 land nubs stranded in
+    the river and 18 water nubs in the land -- and since the bank pass paints any
+    land touching water, each nub rendered as a dark speck sitting ON the water,
+    world-keyed so it never even moved. Exactly the orphan pixels this file
+    criticises the meadow for.
+
+    One pass over the raw mask fixes it: a cell flanked by water on both sides is
+    water, a cell flanked by land on both sides is land, otherwise it keeps its
+    own value. That is a fixed point -- further passes change nothing. Baking also
+    turns water_cell into an array lookup, which matters because the bank pass
+    calls it ~40k times per frame.
+    """
+    raw = [[_water_raw(wc, y) for y in range(PH)] for wc in range(L)]
+    m = bytearray(L * PH)
+    for wc in range(L):
+        left, right = raw[wc - 1], raw[(wc + 1) % L]
+        own = raw[wc]
+        for y in range(ROAD_BOT + 1, PH):
+            a, b = left[y], right[y]
+            m[wc * PH + y] = (a and b) or (own[y] and (a or b))
+    return m
+
+
+WATER = _build_water_mask()
+
+
+def water_cell(wc, y):
+    return WATER[(wc % L) * PH + y]
 
 # ------------------------------------------------------------ drawing
 
@@ -274,7 +394,12 @@ def make_frame(t):
                 elif 6.6 <= dd < 9 and (xx + yy) % 2:
                     px[xx, yy] = lerp(px[xx, yy], MOON_C, 0.12)
 
-    # --- clouds (0.5x): puffy top, shaded underside
+    # --- clouds (0.5x): puffy top, shaded underside.
+    # A 3-lobe 4-step version was tried and reverted: at the cloud's altitude the
+    # darkest step sat only ~17 luminance above the sky, white pixels dropped
+    # 46 -> 18, and because the cloud is ~16 px wide but 4 tall the gradient was
+    # dominated by ddx, so it shaded left-to-right instead of top-down. It lost
+    # the cloud's figure-ground read entirely.
     ccol = pal(*P_CLOUD, d, g)
     csh = pal(*P_CLOUD_SH, d, g)
     for cx, cy in CLOUDS:
@@ -300,14 +425,26 @@ def make_frame(t):
                         px[xx, byw - wing] = bcol2
 
     # --- far mountains (0.25x), lit on the sunward slope
+    #
+    # `far_ridge` returns a screen y, so SMALLER means higher. A ridge that rises
+    # going right (`far_ridge(wx+1) < top_y`) is the flank LEFT of a summit, and
+    # it faces left. The original test used `<` under a comment claiming
+    # "right-descending", so the peaks were lit from the upper LEFT while the sun
+    # sits at x=187 of 246. Everything else in the scene now shades from the
+    # upper right, so this is `>`: the flank that descends to the right.
+    #
+    # The per-column snow-depth jitter that used to live here is gone. It cut the
+    # cap into a comb -- snow runs went 52 -> 99 with mean length 4.73 -> 2.11 and
+    # 49 runs of a single pixel -- and it drove the mountain band's frame-to-frame
+    # delta up 47%, so the ridge sparkled as it scrolled.
     fcol = pal(*P_FAR, d, g * 0.5)
     flit = pal(*P_FAR_LIT, d, g * 0.5)
+    snow = pal((236, 242, 250), (110, 118, 142), d)
     off_f = int(s * 0.25) % FAR_LEN
     for x in range(PW):
         wx = (x + off_f) % FAR_LEN
         top_y = far_ridge(wx)
-        lit = far_ridge(wx + 1) < top_y      # right-descending = lit edge
-        snow = pal((236, 242, 250), (110, 118, 142), d)
+        lit = far_ridge(wx + 1) > top_y      # descends to the right = faces the sun
         tall = HORIZON - top_y > 30
         for y in range(top_y, HORIZON + 1):
             if tall and y - top_y < 3:
@@ -323,7 +460,11 @@ def make_frame(t):
         for x in range(PW):
             px[x, y] = dg
 
-    # --- hills (0.5x)
+    # --- hills (0.5x). A "lit crest" was tried and reverted: it lightened EVERY
+    # crest pixel and only varied the amount, so a pale hairline traced the whole
+    # silhouette including slopes facing away from the sun -- pillow shading. Its
+    # rim target was also hard-coded with no d/g, so at night the hills were
+    # rim-lit in daylight-coloured light at the same value as the bridge railings.
     off_h = int(s * 0.5) % HILL_LEN
     for x in range(PW):
         for y in range(hill_ridge((x + off_h) % HILL_LEN), ROAD_TOP):
@@ -402,13 +543,17 @@ def make_frame(t):
         if 0 <= x < PW and 0 <= y < PH:
             px[x, y] = c
 
-    # --- lake banks
+    # --- water banks, derived from water_cell rather than recomputed from the
+    # inset formulas. Duplicating that geometry is how the river ended up with
+    # water and no bank at all; asking "is this land next to water?" cannot
+    # drift, and it covers the lake and the gorge in one pass.
     bank = lerp(gcol, (0, 0, 0), 0.25)
-    for y in range(ROAD_BOT + 1, ROAD_BOT + 25):
-        inset = (y - ROAD_BOT - 1) * 4
-        for wxb in (LAKE_L + 8 + inset - 1, LAKE_R - 8 - inset + 1):
-            x = (wxb - off) % L
-            if 0 <= x < PW:
+    for y in range(ROAD_BOT + 1, PH):
+        for x in range(PW):
+            wc = (x + off) % L
+            if water_cell(wc, y):
+                continue
+            if water_cell(wc - 1, y) or water_cell(wc + 1, y):
                 plot(x, y, bank)
 
     # --- fences (kept light so they don't dominate the day)
@@ -424,44 +569,80 @@ def make_frame(t):
             if 0 <= x < PW:
                 plot(x, ROAD_TOP - 5, fcol2)
 
-    # --- trees: two-tone canopies
-    tcol = pal(*P_TREE, d, g * 0.3)
-    tlit = pal(*P_TREE_LIT, d, g * 0.3)
+    # --- trees: canopies built from overlapping lobes and shaded on a five-step
+    # ramp. A single smooth ellipse split into two tones was the flat-blob tell:
+    # a crown reads as a cluster of masses with a lumpy edge, never as a shape
+    # with a mathematically clean outline.
+    ramp = tuple(pal(*p, d, g * 0.3) for p in
+                 (P_TREE_DP, P_TREE_SH, P_TREE, P_TREE_LIT, P_TREE_HI))
+    tcol = ramp[2]
+    tlit = ramp[3]
     kcol = pal(*P_TRUNK, d)
+    klit = lerp(kcol, (255, 236, 200), 0.25)
+    kdrk = lerp(kcol, (0, 0, 0), 0.35)
     for wx, kind in TREES:
         x = (wx - off) % L
         if not -12 <= x < PW + 12:
             continue
         if kind == 'leafy':
             for yy in range(ROAD_TOP - 7, ROAD_TOP):
-                plot(x, yy, kcol)
-                plot(x + 1, yy, kcol)
+                plot(x, yy, kdrk)              # shadow side
+                plot(x + 1, yy, klit)          # sunward side
             cy = ROAD_TOP - 11
-            for ddx in range(-7, 9):
-                for ddy in range(-5, 6):
-                    if (ddx - 0.5) ** 2 / 1.7 + ddy * ddy <= 23:
-                        lit = ddy < -1 or (ddx < -2 and ddy < 1)
-                        plot(x + ddx, cy + ddy, tlit if lit else tcol)
+            # Three lobes with a per-tree radius wobble. Drawn left to right so
+            # the sunward lobe wins where they overlap.
+            lobes = ((-4, 1, 4.6), (1, -2, 5.3), (5, 0, 4.3))
+            for li, (lx, ly, r) in enumerate(lobes):
+                rr = r + (h8(wx, li) % 3 - 1) * 0.9
+                span = int(rr) + 1
+                for ddx in range(lx - span, lx + span + 1):
+                    for ddy in range(ly - span, ly + span + 1):
+                        dx, dy = ddx - lx, (ddy - ly) * 1.5
+                        if dx * dx + dy * dy > rr * rr:
+                            continue
+                        # Shaded per LOBE, not across the whole crown. Shading
+                        # from the crown origin produced one linear wash, so the
+                        # ramp came out as parallel equal-width diagonal stripes
+                        # -- textbook banding -- and the lobes bought silhouette
+                        # variety with no volume. Per-lobe, each mass rounds.
+                        plot(x + ddx, cy + ddy,
+                             ramp[shade_index(dx, dy, rr * 1.1)])
         else:
             h = 15 + (wx * 7) % 8            # every pine its own height
             for i in range(h):
                 yy = ROAD_TOP - h + i
                 w = 1 + i * 5 // h
+                # No bough term. A "+1 every third row" was tried and removed: for
+                # the h=15 pines the widths were already monotone so nothing
+                # jutted at all, and for h=18/20 the wide row had narrower rows
+                # both above AND below it -- a wart, where a real conifer tier is
+                # widest at its bottom. On the h=20 pine it also pinched the base,
+                # putting the widest row three rows off the ground.
                 for ddx in range(-w, w + 1):
-                    lit = ddx < -w // 2 and i > 2
-                    plot(x + ddx, yy, tlit if lit else tcol)
+                    # Span tracks the row's actual light range, or narrow rows
+                    # collapse onto one ramp step. Clamped to the middle three
+                    # steps: spending the full ramp made the pines a dark mass
+                    # that swallowed the rider's black bike frame in front of it.
+                    j = shade_index(ddx, 0, max(1.2, w * LIGHT[0] + 0.35))
+                    plot(x + ddx, yy, ramp[min(3, max(1, j))])
             plot(x, ROAD_TOP - 1, kcol)
             plot(x, ROAD_TOP - 2, kcol)
 
-    # --- bushes: low tufts along the roadside
+    # --- bushes: low tufts along the roadside. ddy is inverted by the plot, so
+    # ddy=2 is the top; it was already lit correctly, it just had two tones and
+    # no sense of which way the light came from.
     for wx in BUSHES:
         x = (wx - off) % L
         if -4 <= x < PW + 4:
             for ddx in range(-3, 4):
                 for ddy in range(0, 3):
                     if ddx * ddx + (ddy - 1) ** 2 * 3 <= 9:
-                        plot(x + ddx, ROAD_TOP - 1 - ddy,
-                             tlit if ddy == 2 else tcol)
+                        # span 2.1, not 4.0: the mask caps the real light range at
+                        # +/-2.05, so a wider span left the darkest and lightest
+                        # foliage steps unreachable on every bush -- the same
+                        # span-mismatch bug the pines had.
+                        i = shade_index(ddx, -ddy + 1, 2.1)
+                        plot(x + ddx, ROAD_TOP - 1 - ddy, ramp[i])
 
     # --- reeds, leaning with the wind
     sway = 1 if (t // 7 + 1) % 3 == 0 else 0
