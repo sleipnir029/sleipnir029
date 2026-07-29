@@ -27,16 +27,26 @@ BG, INK = '#14131a', '#e8e6e3'
 FONT = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
 CH, FS, H = 6.6, 11, 20
 
-# The favicon's R, traced off /Users/.../faviconV2.png at its native 6x7. Drawn
-# at 2x so it carries the same visual weight as the 12x12 brand glyphs.
+# The favicon's R, redrawn at 12 px tall so it matches the 12x12 brand glyphs
+# exactly. The favicon is 6x7, and 6x7 doubled is 12x14 -- a pixel taller than its
+# neighbours -- while dropping a source row to square it up takes the R's leg with
+# it and the glyph stops reading as a letter. So the letterform is re-cut at the
+# target size instead of scaled to it: same construction as the favicon (3 px
+# stem, bowl with an open counter, leg kicking down-right), one grid cell per
+# badge pixel.
 R_GLYPH = [
-    '#####.',
-    '######',
-    '##..##',
-    '######',
-    '#####.',
-    '##.###',
-    '##..##',
+    '#######...',
+    '########..',
+    '###...###.',
+    '###...###.',
+    '###...###.',
+    '###...###.',
+    '########..',
+    '#######...',
+    '###.###...',
+    '###..###..',
+    '###...###.',
+    '###....###',
 ]
 R_TEAL = '#55d5b8'   # sampled from the favicon
 
@@ -47,14 +57,8 @@ ICONS = {
 }
 
 
-def r_mark(x0, y0, scale=2):
-    """The favicon R as a grid of rects -- font-free and renderer-independent.
-
-    6x7 source at scale 2 is 12x14, so the mark is one pixel taller than the
-    12x12 brand glyphs and sits a pixel higher in the row. Left that way on
-    purpose: dropping the bottom source row squares it up to 12x12 but takes the
-    R's leg with it and the glyph stops reading as a letter.
-    """
+def r_mark(x0, y0, scale=1):
+    """The R as a grid of rects -- font-free and renderer-independent."""
     out = []
     for ry, row in enumerate(R_GLYPH):
         for rx, ch in enumerate(row):
@@ -70,7 +74,7 @@ def glyph(icon, colour):
 
 
 BADGES = [
-    ('website',  'website',  r_mark(7, 3),               'website'),
+    ('website',  'website',  r_mark(8, 4),               'website'),
     ('zeezbit',  'zeezbit',  glyph('itch', '#FA5C5C'),   'zeezbit on itch.io'),
     ('bluesky',  'bluesky',  glyph('bsky', '#0285FF'),   'bluesky'),
     ('leetcode', 'leetcode', glyph('lc',   '#FFA116'),   'leetcode'),
