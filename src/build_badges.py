@@ -11,15 +11,17 @@ CSS from README SVG, so everything here is an inline `fill=` attribute and no
 <style> block. `textLength` pins each label to an exact pixel width, so a font
 fallback in GitHub's renderer cannot overflow the chip.
 
-The website mark is the rzaman.site favicon's R, redrawn as a 2x pixel grid
-rather than embedded as a nested base64 image (camo can strip nested <image>).
-
-Brand glyphs are simple-icons paths (CC0), 24x24 viewBox scaled to 12x12.
+All four marks are 24x24 vector paths scaled into the same 12x12 slot, so they
+match each other in size and in rendering character. The three brand glyphs are
+simple-icons paths (CC0); the website mark is the rzaman.site favicon's R redrawn
+as a path -- not embedded as a nested base64 image, since camo can strip nested
+<image>, and not as a pixel grid, which read as hard-edged among smooth ones.
 
     python3 src/build_badges.py
 """
 import html
 import pathlib
+import re
 
 ASSETS = pathlib.Path(__file__).resolve().parents[1] / 'assets'
 
@@ -27,27 +29,17 @@ BG, INK = '#14131a', '#e8e6e3'
 FONT = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
 CH, FS, H = 6.6, 11, 20
 
-# The favicon's R, redrawn at 12 px tall so it matches the 12x12 brand glyphs
-# exactly. The favicon is 6x7, and 6x7 doubled is 12x14 -- a pixel taller than its
-# neighbours -- while dropping a source row to square it up takes the R's leg with
-# it and the glyph stops reading as a letter. So the letterform is re-cut at the
-# target size instead of scaled to it: same construction as the favicon (3 px
-# stem, bowl with an open counter, leg kicking down-right), one grid cell per
-# badge pixel.
-R_GLYPH = [
-    '#######...',
-    '########..',
-    '###...###.',
-    '###...###.',
-    '###...###.',
-    '###...###.',
-    '########..',
-    '#######...',
-    '###.###...',
-    '###..###..',
-    '###...###.',
-    '###....###',
-]
+# The rzaman.site favicon's R as a vector path, so it renders like the three
+# brand glyphs beside it rather than as a hard-edged pixel grid among smooth ones.
+#
+# Proportions are taken from the favicon, not invented: its glyph is 6x7 with a
+# 2px stem (33% of width), a bowl filling the top 4 rows (57% of height), a
+# counter only 2x1 -- so the bowl reads dense, not open -- and a 2-row leg kicking
+# down-right. An earlier attempt scaled the 6x7 grid up instead; at 12 px that is
+# either a pixel too tall or missing its leg, and it gave the counter four times
+# the area it should have, which turns a blocky R into a conventional one.
+R_PATH = ('M0 0h15.4c4.7 0 8.6 3 8.6 6.8s-3.9 6.8-8.6 6.8h-2.1L24 24h-9.6'
+          'l-6.2-7.4V24H0V0zm8.2 4.3v5h6.6c1.8 0 3.2-1.1 3.2-2.5s-1.4-2.5-3.2-2.5H8.2z')
 R_TEAL = '#55d5b8'   # sampled from the favicon
 
 ICONS = {
@@ -57,27 +49,17 @@ ICONS = {
 }
 
 
-def r_mark(x0, y0, scale=1):
-    """The R as a grid of rects -- font-free and renderer-independent."""
-    out = []
-    for ry, row in enumerate(R_GLYPH):
-        for rx, ch in enumerate(row):
-            if ch == '#':
-                out.append(f'<rect x="{x0 + rx * scale}" y="{y0 + ry * scale}" '
-                           f'width="{scale}" height="{scale}" fill="{R_TEAL}"/>')
-    return ''.join(out)
-
-
-def glyph(icon, colour):
+def glyph(path, colour, rule=''):
+    """Drop a 24x24 path into the 12x12 logo slot every badge shares."""
     return (f'<g transform="translate(7 4) scale(0.5)">'
-            f'<path fill="{colour}" d="{ICONS[icon]}"/></g>')
+            f'<path fill="{colour}"{rule} d="{path}"/></g>')
 
 
 BADGES = [
-    ('website',  'website',  r_mark(8, 4),               'website'),
-    ('zeezbit',  'zeezbit',  glyph('itch', '#FA5C5C'),   'zeezbit on itch.io'),
-    ('bluesky',  'bluesky',  glyph('bsky', '#0285FF'),   'bluesky'),
-    ('leetcode', 'leetcode', glyph('lc',   '#FFA116'),   'leetcode'),
+    ('website',  'website',  glyph(R_PATH, R_TEAL, ' fill-rule="evenodd"'), 'website'),
+    ('zeezbit',  'zeezbit',  glyph(ICONS['itch'], '#FA5C5C'),   'zeezbit on itch.io'),
+    ('bluesky',  'bluesky',  glyph(ICONS['bsky'], '#0285FF'),   'bluesky'),
+    ('leetcode', 'leetcode', glyph(ICONS['lc'], '#FFA116'),   'leetcode'),
 ]
 
 
@@ -100,6 +82,10 @@ def build():
         assert '<style' not in svg and '<script' not in svg, name
         assert 'data:' not in svg and 'url(' not in svg, name
         assert svg.count('http') == 1, name          # the xmlns only
+        # A glyph that silently fails renders as text with a blank space where
+        # the logo should be, which is easy to ship without noticing -- passing
+        # an icon KEY where a path was expected once emitted d="lc".
+        assert re.search(r'd="M[^"]{40,}"', svg), f'{name}: glyph path missing'
         p = ASSETS / f'badge-{name}.svg'
         p.write_text(svg)
         print(f'{p.name}  {w}x{H}')
